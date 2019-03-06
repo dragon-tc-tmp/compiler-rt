@@ -4036,6 +4036,25 @@ INTERCEPTOR(int, sigprocmask, int how, __sanitizer_sigset_t *set,
 #define INIT_SIGPROCMASK
 #endif
 
+#if SANITIZER_INTERCEPT_PTHREAD_SIGMASK
+INTERCEPTOR(int, pthread_sigmask, int how, __sanitizer_sigset_t *set,
+            __sanitizer_sigset_t *oldset) {
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, pthread_sigmask, how, set, oldset);
+  if (set) COMMON_INTERCEPTOR_READ_RANGE(ctx, set, sizeof(*set));
+  // FIXME: under ASan the call below may write to freed memory and corrupt
+  // its metadata. See
+  // https://github.com/google/sanitizers/issues/321.
+  int res = REAL(pthread_sigmask)(how, set, oldset);
+  if (!res && oldset)
+    COMMON_INTERCEPTOR_WRITE_RANGE(ctx, oldset, sizeof(*oldset));
+  return res;
+}
+#define INIT_PTHREAD_SIGMASK COMMON_INTERCEPT_FUNCTION(pthread_sigmask);
+#else
+#define INIT_PTHREAD_SIGMASK
+#endif
+
 #if SANITIZER_INTERCEPT_BACKTRACE
 INTERCEPTOR(int, backtrace, void **buffer, int size) {
   void *ctx;
@@ -4717,6 +4736,20 @@ INTERCEPTOR(char *, tmpnam_r, char *s) {
 #define INIT_TMPNAM_R COMMON_INTERCEPT_FUNCTION(tmpnam_r);
 #else
 #define INIT_TMPNAM_R
+#endif
+
+#if SANITIZER_INTERCEPT_TTYNAME
+INTERCEPTOR(char *, ttyname, int fd) {
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, ttyname, fd);
+  char *res = REAL(ttyname)(fd);
+  if (res != nullptr)
+    COMMON_INTERCEPTOR_INITIALIZE_RANGE(res, REAL(strlen)(res) + 1);
+  return res;
+}
+#define INIT_TTYNAME COMMON_INTERCEPT_FUNCTION(ttyname);
+#else
+#define INIT_TTYNAME
 #endif
 
 #if SANITIZER_INTERCEPT_TTYNAME_R
@@ -5496,11 +5529,20 @@ INTERCEPTOR(void *, __bzero, void *block, uptr size) {
   void *ctx;
   COMMON_INTERCEPTOR_MEMSET_IMPL(ctx, block, 0, size);
 }
-
 #define INIT___BZERO COMMON_INTERCEPT_FUNCTION(__bzero);
 #else
 #define INIT___BZERO
 #endif  // SANITIZER_INTERCEPT___BZERO
+
+#if SANITIZER_INTERCEPT_BZERO
+INTERCEPTOR(void *, bzero, void *block, uptr size) {
+  void *ctx;
+  COMMON_INTERCEPTOR_MEMSET_IMPL(ctx, block, 0, size);
+}
+#define INIT_BZERO COMMON_INTERCEPT_FUNCTION(bzero);
+#else
+#define INIT_BZERO
+#endif  // SANITIZER_INTERCEPT_BZERO
 
 #if SANITIZER_INTERCEPT_FTIME
 INTERCEPTOR(int, ftime, __sanitizer_timeb *tp) {
@@ -9595,6 +9637,7 @@ static void InitializeCommonInterceptors() {
   INIT_SIGSETOPS;
   INIT_SIGPENDING;
   INIT_SIGPROCMASK;
+  INIT_PTHREAD_SIGMASK;
   INIT_BACKTRACE;
   INIT__EXIT;
   INIT_PTHREAD_MUTEX_LOCK;
@@ -9633,6 +9676,7 @@ static void InitializeCommonInterceptors() {
   INIT_PTHREAD_BARRIERATTR_GETPSHARED;
   INIT_TMPNAM;
   INIT_TMPNAM_R;
+  INIT_TTYNAME;
   INIT_TTYNAME_R;
   INIT_TEMPNAM;
   INIT_PTHREAD_SETNAME_NP;
@@ -9658,6 +9702,7 @@ static void InitializeCommonInterceptors() {
   INIT_CAPGET;
   INIT_AEABI_MEM;
   INIT___BZERO;
+  INIT_BZERO;
   INIT_FTIME;
   INIT_XDR;
   INIT_TSEARCH;

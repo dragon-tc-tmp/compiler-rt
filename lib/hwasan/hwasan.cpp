@@ -1,4 +1,4 @@
-//===-- hwasan.cc ---------------------------------------------------------===//
+//===-- hwasan.cpp --------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -144,23 +144,6 @@ static void InitializeFlags() {
   if (common_flags()->help) parser.PrintFlagDescriptions();
 }
 
-void GetStackTrace(BufferedStackTrace *stack, uptr max_s, uptr pc, uptr bp,
-                   void *context, bool request_fast_unwind) {
-  Thread *t = GetCurrentThread();
-  if (!t) {
-    // the thread is still being created.
-    stack->size = 0;
-    return;
-  }
-  if (!StackTrace::WillUseFastUnwind(request_fast_unwind)) {
-    // Block reports from our interceptors during _Unwind_Backtrace.
-    SymbolizerScope sym_scope;
-    return stack->Unwind(max_s, pc, bp, context, 0, 0, request_fast_unwind);
-  }
-  stack->Unwind(max_s, pc, bp, context, t->stack_top(), t->stack_bottom(),
-                request_fast_unwind);
-}
-
 static void HWAsanCheckFailed(const char *file, int line, const char *cond,
                               u64 v1, u64 v2) {
   Report("HWAddressSanitizer CHECK failed: %s:%d \"%s\" (0x%zx, 0x%zx)\n", file,
@@ -260,6 +243,26 @@ void InitInstrumentation() {
 }
 
 } // namespace __hwasan
+
+void __sanitizer::BufferedStackTrace::UnwindImpl(
+    uptr pc, uptr bp, void *context, bool request_fast, u32 max_depth) {
+  using namespace __hwasan;
+  Thread *t = GetCurrentThread();
+  if (!t) {
+    // the thread is still being created.
+    size = 0;
+    return;
+  }
+  if (!StackTrace::WillUseFastUnwind(request_fast)) {
+    // Block reports from our interceptors during _Unwind_Backtrace.
+    SymbolizerScope sym_scope;
+    return Unwind(max_depth, pc, bp, context, 0, 0, request_fast);
+  }
+  if (StackTrace::WillUseFastUnwind(request_fast))
+    Unwind(max_depth, pc, bp, nullptr, t->stack_top(), t->stack_bottom(), true);
+  else
+    Unwind(max_depth, pc, 0, context, 0, 0, false);
+}
 
 // Interface.
 
@@ -475,6 +478,28 @@ void __hwasan_handle_longjmp(const void *sp_dst) {
     return;
   }
   TagMemory(sp, dst - sp, 0);
+}
+
+void __hwasan_handle_vfork(const void *sp_dst) {
+  uptr sp = (uptr)sp_dst;
+  Thread *t = GetCurrentThread();
+  CHECK(t);
+  uptr top = t->stack_top();
+  uptr bottom = t->stack_bottom();
+  if (top == 0 || bottom == 0 || sp < bottom || sp >= top) {
+    Report(
+        "WARNING: HWASan is ignoring requested __hwasan_handle_vfork: "
+        "stack top: %zx; current %zx; bottom: %zx \n"
+        "False positive error reports may follow\n",
+        top, sp, bottom);
+    return;
+  }
+  TagMemory(bottom, sp - bottom, 0);
+}
+
+extern "C" void *__hwasan_extra_spill_area() {
+  Thread *t = GetCurrentThread();
+  return &t->vfork_spill();
 }
 
 void __hwasan_print_memory_usage() {
