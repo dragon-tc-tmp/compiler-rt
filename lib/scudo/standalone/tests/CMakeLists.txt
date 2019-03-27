@@ -51,9 +51,13 @@ endmacro()
 set(SCUDO_UNIT_TEST_SOURCES
   atomic_test.cc
   bytemap_test.cc
+  checksum_test.cc
   list_test.cc
   map_test.cc
   mutex_test.cc
+  report_test.cc
+  stats_test.cc
+  strings_test.cc
   vector_test.cc
   scudo_unit_test_main.cc)
 
